@@ -1,5 +1,5 @@
 # 2016-Networks Projects
-**Based off skeleton code by UCM ANDES Lab
+**Based off [skeleton code](https://github.com/UCMAndesLab/CSE160-Project-Skeleton-Code) by UCM ANDES Lab
  and abeltran2.**
 
 TinyOS implementation of network flooding, neighbor discovery, routing and forwarding, TCP. 
