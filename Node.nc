@@ -17,6 +17,8 @@
 #define SERVER_SOCKET 123
 #define CLIENT_DEFAULT_SOCKET 200
 
+
+
 module Node{
    uses interface Boot;
 
@@ -40,6 +42,7 @@ module Node{
 	uses interface Receive as ForwardReplyReceive;
 	
 	uses interface Transport;
+	uses interface Queue<socket_t> as socketQueue;
 	
 	
 }
@@ -130,6 +133,9 @@ implementation{
 			// signal me when server has ESTABLISHED a connection
 			dbg(GENERAL_CHANNEL, "CONNECTION ACCEPTED - Server \n");
 			
+			//push to established queue
+			//call socketQueue.push(fd);	//no socketQueue component.... bcs it's in Node not Transport interface. but want to push to node
+			
 			return fd;
 			
 	}
@@ -138,6 +144,9 @@ implementation{
 			
 			// signal me when client has ESTABLISHED a connection
 			dbg(GENERAL_CHANNEL, "CONNECTION COMPLETED - Client \n");
+			
+			//push to established queue
+			//call socketQueue.push(fd);
 			
 			return fd;
 			

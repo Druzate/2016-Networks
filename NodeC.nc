@@ -47,5 +47,8 @@ implementation {
 	
 	components TransportC;
 	Node.Transport -> TransportC.Transport;
+	components new QueueC(socket_t, 30) as sockQueue;
+	Node.socketQueue->sockQueue;
+	
 }
 

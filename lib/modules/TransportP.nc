@@ -10,7 +10,7 @@
 #define TRUE 1
 #define SOCKET_POOL_SIZE 30		// don't exceed 2^8
 
-#define BEACON_PERIOD 50000		// potentially, timeout
+#define BEACON_PERIOD 70000		// potentially, timeout
 
 
 module TransportP{
@@ -37,7 +37,18 @@ implementation {
 	
 	
 		event void beaconTimer.fired(){
-			// use as timeout??
+			
+			// connection timeout
+			
+			// go through hash keys
+			// for each hash entry
+				// if ESTABLISHED, continue;
+				// if CONN_SYN_SENT, resend SYN
+				// if CONN_SYN_RCVD, resend SYN_ACK <-- actually, is this necessary? eventually you'd get another request if it was needed
+				// if 
+				// if [insert teardown stuff here]
+			
+			
 		}
 	
 	
@@ -147,7 +158,7 @@ implementation {
 				
 					if (mySocket != NULL) {
 						//this is SYN resend, send SYN_ACK again
-						dbg (TRANSPORT_CHANNEL, "SYN was a resend.\n");
+						dbg (TRANSPORT_CHANNEL, "Resending SYN_ACK.\n");
 						
 						// send SYN_ACK
 						t = (tcp_pack*) p.payload;
@@ -251,6 +262,29 @@ implementation {
 						mySocket->conn_state = CONN_ESTABLISHED;
 						// signal connectDone with your socket
 						signal Transport.connectDone(*mySocket);
+						
+						
+					} else if (mySocket->conn_state = CONN_ESTABLISHED) {	// server never got ACK, resend
+						// send ACK
+						dbg (TRANSPORT_CHANNEL, "Resending ACK.\n");
+						
+						// send ACK
+						t = (tcp_pack*) p.payload;
+						// create SYN_ACK in tcp
+						t->dest_port = mySocket->dest_addr.port;
+						t->src_port = mySocket->src_addr.port;
+						srand(time(NULL));
+						t->seq = rand();
+						t->ACK = seqNum+1;
+						t->flags = ACK_FLAG;
+						t->advertised_window = BUFFER_SIZE;
+						
+						call Transport.makePack(&p, TOS_NODE_ID, mySocket->dest_addr.location, MAX_TTL, PROTOCOL_TCP, 0, t, 0);
+						// payload manipulated directly
+						
+						// call send in Forwarder
+						call TransportSender.send(p, mySocket->dest_addr.location);
+						return;
 					}
 				
 				} else if (flag == ACK_FLAG) {	// if ACK 
