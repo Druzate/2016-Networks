@@ -16,7 +16,7 @@
 
 #define SERVER_SOCKET 123
 #define CLIENT_DEFAULT_SOCKET 200
-#define APP_TIMER 120000
+#define APP_TIMER 135000
 #define APP_BUFFER_SIZE 40
 
 
@@ -226,10 +226,12 @@ implementation{
 			dbg(GENERAL_CHANNEL, "App read: ");
 			if (j != 0) {
 				for (j = 0; j< APP_BUFFER_SIZE; j++) {
-					if (j == APP_BUFFER_SIZE - 1) {
+					if (j == APP_BUFFER_SIZE - 1 && readBuffer[j] != 0) {
 						dbg_clear(GENERAL_CHANNEL, "%hu\n", readBuffer[j]);
-					} else {
+					} else if (readBuffer[j] != 0) {
 						dbg_clear(GENERAL_CHANNEL, "%hu, ", readBuffer[j]);
+					} else if (j == APP_BUFFER_SIZE - 1) {
+						dbg_clear(GENERAL_CHANNEL, "\n");
 					}
 				}
 			} else {

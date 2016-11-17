@@ -1,4 +1,3 @@
-// Neighbor Discovery Module
 #include "../../includes/channels.h"
 #include "../../includes/protocol.h"
 #include "../../includes/packet.h"
@@ -36,6 +35,50 @@ implementation {
 		
 	
 		event void queueTimer.fired(){
+			pack p;
+			tcp_pack* t;
+			socket_t* mySocket;
+			uint32_t myKey;
+			
+			if (!call toSendQueue.empty()) {
+				dbg (TRANSPORT_CHANNEL, "Queue timer fired, and queue was not empty.\n");
+				
+				p = call toSendQueue.head(); 	//pop head
+				t = (tcp_pack*)(p.payload);
+				
+				//find socket
+				myKey = call Transport.getKey(t->src_port, t->dest_port, p.dest);
+				
+				if (call hashmap.contains( myKey )){
+					mySocket = call hashmap.get( myKey );
+					
+					if (mySocket->lastAcked < t->ACK && mySocket->lastWritten > t->ACK){
+						call toSendQueue.enqueue(p);
+						call TransportSender.send(p, mySocket->dest_addr.location);
+						dbg (TRANSPORT_CHANNEL, "Resending from queue.\n");
+					} else if (mySocket->lastAcked < t->ACK && mySocket->lastWritten < t->ACK && mySocket->lastWritten < mySocket->lastAcked){
+						call toSendQueue.enqueue(p);
+						call TransportSender.send(p, mySocket->dest_addr.location);
+						dbg (TRANSPORT_CHANNEL, "Resending from queue.\n");
+					} else if (mySocket->lastAcked > t->ACK && mySocket->lastWritten > t->ACK) {
+						call toSendQueue.enqueue(p);
+						call TransportSender.send(p, mySocket->dest_addr.location);
+						dbg (TRANSPORT_CHANNEL, "Resending from queue.\n");
+					}
+					
+					// else, it's okay to leave alone
+					
+				} else {
+					// socket not found, maybe packet corrupted, maybe connection closed now, etc
+					dbg (TRANSPORT_CHANNEL, "Queue connect broke.\n");
+				}
+				
+			
+			}
+			
+			if (!call toSendQueue.empty() && !call queueTimer.isRunning())
+				call queueTimer.startOneShot(BEACON_TIME);
+			
 			// if queue exists
 				// pull head
 				// if last byte acked < head.tcp.ACK
@@ -46,9 +89,7 @@ implementation {
 					// requeue
 				// else
 					// no need to resend
-				
-				// if queue exists && beacon is not set
-					// set one time beacon again
+			
 		}
 	
 		event void beaconTimer.fired(){
@@ -83,10 +124,8 @@ implementation {
 						dbg (TRANSPORT_CHANNEL, "Conn established\n", mySocket->dest_addr.location);
 						
 						if (mySocket->lastWritten - mySocket->lastSent != 0) {	// if there is something to send
-							dbg (TRANSPORT_CHANNEL, "Sock1.\n", mySocket->dest_addr.location);
-							if (mySocket->lastSent - mySocket->lastAcked == 0) {	// change to "< mySocket->advertised_window" later
+							if (mySocket->lastSent - mySocket->lastAcked < mySocket->advertised_window) {	// change to "< mySocket->advertised_window" later
 								//prepare TCP packet
-								dbg (TRANSPORT_CHANNEL, "Sock2.\n", mySocket->dest_addr.location);
 								t = (tcp_pack*) p.payload;
 								t->dest_port = mySocket->dest_addr.port;
 								t->src_port = mySocket->src_addr.port;
@@ -121,6 +160,8 @@ implementation {
 						
 								// stick this in queue
 								call toSendQueue.enqueue(p);
+								if (!call queueTimer.isRunning())
+									call queueTimer.startOneShot(BEACON_TIME);
 						
 								// call send in Forwarder
 								call TransportSender.send(p, mySocket->dest_addr.location);
@@ -283,7 +324,7 @@ implementation {
 				// can write from beginning to acked and from written to end
 				isWrap = TRUE;
 				writeLengthPossible = (BUFFER_SIZE - mySocket->lastWritten) + (mySocket->lastAcked);
-				} else {	// if (mySocket->lastWritten < mySocket->lastAcked)
+			} else {	// if (mySocket->lastWritten < mySocket->lastAcked)
 				// non-wrap, can write from written to acked
 				isWrap = FALSE;
 				writeLengthPossible = (mySocket->lastAcked - mySocket->lastWritten);
@@ -328,9 +369,6 @@ implementation {
 					// next, set new written position
 					mySocket->lastWritten += bufflen;
 				}
-				dbg (TRANSPORT_CHANNEL, "BUFFER_ZISE - last written: %u.\n", (BUFFER_SIZE - mySocket->lastWritten) );
-				dbg (TRANSPORT_CHANNEL, "Last acked: %u.\n", (mySocket->lastAcked));
-				dbg (TRANSPORT_CHANNEL, "Send buffer remaining in socket after copying: %u.\n", (BUFFER_SIZE - mySocket->lastWritten) + (mySocket->lastAcked));
 				
 				if (mySocket->lastWritten > BUFFER_SIZE)
 					mySocket->lastWritten -= BUFFER_SIZE;
@@ -370,7 +408,7 @@ implementation {
 			}
 			
 			
-			if (flag != DATA_FLAG || flag != DATA_ACK_FLAG) {	// this is part of a handshake
+			if (flag == SYN_FLAG || flag == SYN_ACK_FLAG || flag == ACK_FLAG) {	// this is part of a handshake
 				
 				if (flag == SYN_FLAG) {	//if SYN you are server
 					dbg (TRANSPORT_CHANNEL, "Received SYN.\n");
@@ -516,17 +554,25 @@ implementation {
 						// signal accept with your socket
 						signal Transport.accept(*mySocket);
 					}
+				} else {
+					
+					
+					//dbg (TRANSPORT_CHANNEL, "Recieved packet. What kind? We don't know. why is this.\n number of flag is %u\n", flag);
 				}
 				
-					
+				
 				// if FIN, if FIN_ACK
 				
 				
 			} else {		// this is data !!
 			
+			
 				if (flag == DATA_ACK_FLAG) {
-					dbg (TRANSPORT_CHANNEL, "Recieved ack of data packet.");
-					mySocket->lastAcked = ACKNum + 1;
+					dbg (TRANSPORT_CHANNEL, "Recieved ack of data packet.\n");
+					mySocket->lastAcked = (ACKNum * TCP_PACKET_MAX_PAYLOAD_SIZE);
+					if (mySocket->lastAcked > BUFFER_SIZE) {
+						mySocket->lastAcked -= BUFFER_SIZE;
+					}
 				} else {
 			
 					dbg (TRANSPORT_CHANNEL, "Received data packet.\n");
@@ -594,6 +640,8 @@ implementation {
 						
 						// stick this in queue
 						call toSendQueue.enqueue(p);
+						if (!call queueTimer.isRunning())
+							call queueTimer.startOneShot(BEACON_TIME);
 						
 						// call send in Forwarder
 						call TransportSender.send(p, mySocket->dest_addr.location);
