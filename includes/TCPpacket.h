@@ -6,11 +6,12 @@
 #include "channels.h"
 
 #define DATA_FLAG 0
+#define DATA_ACK_FLAG 6
 #define SYN_FLAG 1
 #define SYN_ACK_FLAG 2
 #define ACK_FLAG 3
 #define FIN_FLAG 4
-#define ACT_FIN_FLAG 5
+#define ACK_FIN_FLAG 5
 
 // for reference: the payload of an "IP" packet is nx_uint8_t * PACKET_MAX_PAYLOAD_SIZE
 // and PACKET_MAX_PAYLOAD_SIZE = 20.
@@ -28,7 +29,7 @@ typedef nx_struct tcp_pack{
 	nx_uint8_t dest_port;
 	nx_uint8_t src_port;
 	nx_uint8_t seq;		//Sequence Number	- which byte chunk is being sent
-	// final payload needs sentinal
+	// final payload needs sentinel
 	// for all SYNACK it would be single random number
 	nx_uint8_t ACK;		//ack - next byte expected (seq + 1)
 	nx_uint8_t flags;

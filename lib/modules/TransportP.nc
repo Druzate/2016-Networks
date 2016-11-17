@@ -26,7 +26,7 @@ module TransportP{
 	uses interface Hashmap<socket_t*> as hashmap;
 	// hash table list of connections
 	
-	uses interface Queue<socket_t> as toSendQueue;
+	uses interface Queue<pack> as toSendQueue;
 	
 	
 	//provides interfaces
@@ -38,10 +38,10 @@ implementation {
 		event void queueTimer.fired(){
 			// if queue exists
 				// pull head
-				// if last byte acked < head.tcp.ACK - 1
+				// if last byte acked < head.tcp.ACK
 					// resend
 					// requeue
-				// else if last byte acked > head.tcp.ACK -1 && last byte written > head.tcp.ACK -140000
+				// else if last byte acked > head.tcp.ACK && last byte written > head.tcp.ACK
 					// resend
 					// requeue
 				// else
@@ -267,7 +267,12 @@ implementation {
 					memcpy(mySocket->sendBuffer, buff+temp, (bufflen - temp)*sizeof(uint8_t) );
 					
 					// next, set new written position
-					mySocket->lastWritten = (bufflen - temp);
+					if (writeLengthPossible < (BUFFER_SIZE - mySocket->lastWritten)) {
+						mySocket->lastWritten += bufflen;
+					} else {
+						mySocket->lastWritten = (bufflen - temp);
+					}
+					
 				} else {
 					// first, copy from lastWritten up to lastAcked
 					memcpy(mySocket->sendBuffer+mySocket->lastWritten, buff, bufflen*sizeof(uint8_t) );
@@ -290,6 +295,9 @@ implementation {
 			uint32_t myKey;
 			socket_t* mySocket = NULL;
 			uint16_t bufflen = TCP_PACKET_MAX_PAYLOAD_SIZE; // TCP_PACKET_MAX_PAYLOAD_SIZE
+			uint16_t i;
+			uint16_t recieveLengthPossible;
+			uint8_t isWrap;
 			
 			pack p;			
 			tcp_pack* t;
@@ -309,7 +317,7 @@ implementation {
 			}
 			
 			
-			if (flag != DATA_FLAG) {	// this is part of a handshake
+			if (flag != DATA_FLAG || flag != DATA_ACK_FLAG) {	// this is part of a handshake
 				
 				if (flag == SYN_FLAG) {	//if SYN you are server
 					dbg (TRANSPORT_CHANNEL, "Received SYN.\n");
@@ -461,23 +469,81 @@ implementation {
 				// if FIN, if FIN_ACK
 				
 				
-			} else {		// this is data
-				dbg (TRANSPORT_CHANNEL, "Received data.\n");
-				// copy into socket
-				
-				// bufflen = CHECK FOR SENTINEL VALUE
-				// if does not exist, bufflen is full, else it is to that point
-				
-				// CHANGE TO FUNCTION OFF BYTES ACKED, ETC
-				// additionally, increment acked or recvd, as well as expected, as necessary
-				
-				if (sizeof(nx_uint8_t)*BUFFER_SIZE < (bufflen+mySocket->recvBufferCounter)) {
-					dbg (TRANSPORT_CHANNEL, "Not enough room in recv buffer to write.\n");
-					return 0;
-				} else {	// else, memcpy and increment counter
-					memcpy(mySocket->recvBuffer+mySocket->recvBufferCounter, msg->payload, bufflen ); 
-					// copy from buff to recvBuffer with recvBufferCounter offset; copy bufflen bytes
-					mySocket->recvBufferCounter += bufflen;
+			} else {		// this is data !!
+			
+				if (flag == DATA_ACK_FLAG) {
+					dbg (TRANSPORT_CHANNEL, "Recieved ack of data packet.");
+					mySocket->lastAcked = ACKNum = 1;
+				} else {
+			
+					dbg (TRANSPORT_CHANNEL, "Received data packet.\n");
+					// copy into socket
+					
+					
+					// bufflen = CHECK FOR SENTINEL VALUE
+					// if does not exist, bufflen is full, else it is full to that point
+					// sentinel value is "0" bcs i'm boring and hoping desperately it won't give me any problems
+					for (i = 0; i< TCP_PACKET_MAX_PAYLOAD_SIZE; i++){
+						if (msg->payload[i] == 0) {
+							bufflen = i;
+							break;
+						}
+					}
+					
+					// this is w/ lastRead, lastRcvd, lastExpected
+					//uint16_t recieveLengthPossible;
+					//uint8_t isWrap;
+					
+					if (mySocket->lastRead <= mySocket->lastRcvd) {	// wrapping, can write from rcvd to end and from beginning to read
+						isWrap = TRUE;
+						recieveLengthPossible = (BUFFER_SIZE - mySocket->lastRcvd) + mySocket->lastRead;
+					} else {	// non-wrapping, can write from rcvd to read
+						isWrap = FALSE;
+						recieveLengthPossible = mySocket->lastRead - mySocket->lastRcvd;
+					}
+					
+					
+					if (bufflen > recieveLengthPossible) {
+						dbg (TRANSPORT_CHANNEL, "Discarding package; not enough room in buffer. ...this shouldn't be happening, oops.\n");
+					} else {
+						if (isWrap == TRUE && bufflen > (BUFFER_SIZE - mySocket->lastRcvd)) {
+							// first, copy from rcvd up to end
+							memcpy(mySocket->recvBuffer+(mySocket->lastRcvd), msg->payload, (BUFFER_SIZE - mySocket->lastRcvd)*sizeof(uint8_t) );
+							// next, copy from beginning to read
+							memcpy(mySocket->recvBuffer, msg->payload+(BUFFER_SIZE - mySocket->lastRcvd), (bufflen - (BUFFER_SIZE - mySocket->lastRcvd))*sizeof(uint8_t) );
+							// next adjust lastRecvd
+							mySocket->lastRcvd = (bufflen - (BUFFER_SIZE - mySocket->lastRcvd));
+						} else { // no wrap possible, or bufflen is small enough that no wrap happens
+							memcpy(mySocket->recvBuffer+(mySocket->lastRcvd), msg->payload, bufflen*sizeof(uint8_t) );
+							mySocket->lastRcvd += bufflen;
+						}
+						
+						// next, send ack of data
+						t = (tcp_pack*) p.payload;
+						t->dest_port = mySocket->dest_addr.port;
+						t->src_port = mySocket->src_addr.port;
+						srand(time(NULL));
+						t->seq = seqNum;
+						t->ACK = seqNum+1;
+						t->flags = DATA_ACK_FLAG;
+						if (isWrap == TRUE) {
+							t->advertised_window = (BUFFER_SIZE - mySocket->lastRcvd) + mySocket->lastRead;
+						} else {
+							t->advertised_window = mySocket->lastRead - mySocket->lastRcvd;
+						}
+						
+						
+						call Transport.makePack(&p, TOS_NODE_ID, mySocket->dest_addr.location, MAX_TTL, PROTOCOL_TCP, 0, t, 0);
+						// payload manipulated directly
+						
+						// stick this in queue
+						call toSendQueue.enqueue(p);
+						
+						// call send in Forwarder
+						call TransportSender.send(p, mySocket->dest_addr.location);
+						
+					}
+					
 				}
 				
 			}
@@ -544,7 +610,11 @@ implementation {
 				// next, copy from beginning of buffer to remaining amount
 				memcpy(buff+(BUFFER_SIZE - mySocket->lastRead), mySocket->recvBuffer, (readLengthPossible - (BUFFER_SIZE - mySocket->lastRead))* sizeof(uint8_t) );
 				// next, set new read position
-				mySocket->lastRead = (readLengthPossible - (BUFFER_SIZE - mySocket->lastRead));
+				if (readLengthPossible < (BUFFER_SIZE - mySocket->lastRead)) {
+					mySocket->lastRead += readLengthPossible;
+				} else {
+					mySocket->lastRead = (readLengthPossible - (BUFFER_SIZE - mySocket->lastRead));
+				}
 			} else {
 				// first, copy from lastRead as much as is possible
 				memcpy(buff, mySocket->recvBuffer+mySocket->lastRead, (readLengthPossible) * sizeof(uint8_t) );
