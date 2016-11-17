@@ -30,8 +30,14 @@ typedef nx_struct socket_t{
 	nx_uint16_t seq; 
 	nx_uint8_t conn_state;
 	nx_uint8_t advertised_window;
+	nx_uint16_t lastRcvd;
+	nx_uint16_t lastRead;
+	nx_uint16_t lastExpected;
 	nx_uint8_t recvBuffer[BUFFER_SIZE];
 	nx_uint16_t recvBufferCounter;
+	nx_uint16_t lastAcked;
+	nx_uint16_t lastSent;
+	nx_uint16_t lastWritten;
 	nx_uint8_t sendBuffer[BUFFER_SIZE];	
 	nx_uint16_t sendBufferCounter;
 	nx_uint8_t isServer;

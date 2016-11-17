@@ -215,11 +215,8 @@ implementation{
 	   dbg(GENERAL_CHANNEL, "App timer fired. \n");
 	   
 	   for (i = 0; i < APP_BUFFER_SIZE; i++){
-		   readBuffer[i] = 0;
-	   }
-	   //memcpy(writeBuffer, &nodeSeq, sizeof(uint16_t) ); 
-	   for (i=0; i<APP_BUFFER_SIZE; i++){
-		   writeBuffer[i] = i+1;
+		   readBuffer[i] = 0;	// make sure readBuffer is initialized/clean
+		   writeBuffer[i] = i+1;	// set up things to write to socket
 	   }
 	   
 	   for (i=0; i< queueSize; i++) {
