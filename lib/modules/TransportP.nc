@@ -57,6 +57,7 @@ implementation {
 			uint16_t i;
 			uint32_t* hashKeys;
 			socket_t* mySocket;
+			uint8_t isWrap;
 			
 			pack p;			
 			tcp_pack* t;
@@ -79,6 +80,51 @@ implementation {
 						continue;
 					} else if (mySocket->conn_state == CONN_ESTABLISHED){		// if ESTABLISHED, continue;
 						// IF THERE IS DATA TO SEND AND WINDOW IS OPEN, SEND DATA
+						
+						
+						if (mySocket->lastWritten - mySocket->lastSent != 0) {	// if there is something to send
+							if (mySocket->lastSent - mySocket->lastAcked == 0) {	// change to "< mySocket->advertised_window" later
+								//prepare TCP packet
+								t = (tcp_pack*) p.payload;
+								t->dest_port = mySocket->dest_addr.port;
+								t->src_port = mySocket->src_addr.port;
+								srand(time(NULL));
+								t->seq = mySocket->seq;
+								t->ACK = mySocket->seq;
+								t->flags = DATA_FLAG;
+								if (mySocket->lastRead <= mySocket->lastRcvd) {	// wrapping, can write from rcvd to end and from beginning to read
+									t->advertised_window = (BUFFER_SIZE - mySocket->lastRcvd) + mySocket->lastRead;
+								} else {	// non-wrapping, can write from rcvd to read
+									t->advertised_window = mySocket->lastRead - mySocket->lastRcvd;
+								}
+								
+								if ((mySocket->lastSent + TCP_PACKET_MAX_PAYLOAD_SIZE) > BUFFER_SIZE) {
+									isWrap = TRUE;
+									memcpy(t->payload, mySocket->sendBuffer+(mySocket->lastSent), (mySocket->lastSent + TCP_PACKET_MAX_PAYLOAD_SIZE) - BUFFER_SIZE);
+									memcpy(t->payload, mySocket->sendBuffer, TCP_PACKET_MAX_PAYLOAD_SIZE - ((mySocket->lastSent + TCP_PACKET_MAX_PAYLOAD_SIZE) - BUFFER_SIZE));
+									mySocket->lastSent = TCP_PACKET_MAX_PAYLOAD_SIZE - ((mySocket->lastSent + TCP_PACKET_MAX_PAYLOAD_SIZE) - BUFFER_SIZE);
+								} else {
+									isWrap = FALSE;
+									memcpy(t->payload, mySocket->sendBuffer+(mySocket->lastSent), TCP_PACKET_MAX_PAYLOAD_SIZE);
+									mySocket->lastSent += TCP_PACKET_MAX_PAYLOAD_SIZE;
+								}
+								
+								
+								
+								call Transport.makePack(&p, TOS_NODE_ID, mySocket->dest_addr.location, MAX_TTL, PROTOCOL_TCP, 0, t, 0);
+								// payload manipulated directly
+						
+								// stick this in queue
+								call toSendQueue.enqueue(p);
+						
+								// call send in Forwarder
+								call TransportSender.send(p, mySocket->dest_addr.location);
+								
+								mySocket->seq++;
+								
+								
+							}
+						}
 						
 						
 
@@ -473,7 +519,7 @@ implementation {
 			
 				if (flag == DATA_ACK_FLAG) {
 					dbg (TRANSPORT_CHANNEL, "Recieved ack of data packet.");
-					mySocket->lastAcked = ACKNum = 1;
+					mySocket->lastAcked = ACKNum + 1;
 				} else {
 			
 					dbg (TRANSPORT_CHANNEL, "Received data packet.\n");

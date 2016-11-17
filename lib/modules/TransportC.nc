@@ -34,7 +34,7 @@ implementation {
 	components ForwarderC;
 	TransportP.TransportSender -> ForwarderC.SimpleSend;
 	
-	components new QueueC(socket_t, 100) as sockQueue;
+	components new QueueC(pack, 100) as sockQueue;
 	TransportP.toSendQueue->sockQueue;
 
 	
