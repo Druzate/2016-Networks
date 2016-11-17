@@ -16,12 +16,15 @@
 
 #define SERVER_SOCKET 123
 #define CLIENT_DEFAULT_SOCKET 200
+#define APP_TIMER 120000
+#define APP_BUFFER_SIZE 40
 
 
 
 module Node{
    uses interface Boot;
 
+   uses interface Timer<TMilli> as beaconTimer;
    uses interface SplitControl as AMControl;
    uses interface Receive;
 
@@ -134,7 +137,7 @@ implementation{
 			dbg(GENERAL_CHANNEL, "CONNECTION ACCEPTED - Server \n");
 			
 			//push to established queue
-			//call socketQueue.push(fd);	//no socketQueue component.... bcs it's in Node not Transport interface. but want to push to node
+			call socketQueue.enqueue(fd);	//no socketQueue component.... bcs it's in Node not Transport interface. but want to push to node
 			
 			return fd;
 			
@@ -146,7 +149,7 @@ implementation{
 			dbg(GENERAL_CHANNEL, "CONNECTION COMPLETED - Client \n");
 			
 			//push to established queue
-			//call socketQueue.push(fd);
+			call socketQueue.enqueue(fd);
 			
 			return fd;
 			
@@ -157,7 +160,6 @@ implementation{
 		 
 	   socket_t *mySocket;
 	   socket_addr_t myAddr;
-	   dbg(GENERAL_CHANNEL, "CMD_TEST_SERVER \n");
 	   
 	   // set this as server and begin listening
 	   
@@ -174,6 +176,9 @@ implementation{
 	   // call listen
 	   call Transport.listen(*mySocket);
 	   
+	   if (!call beaconTimer.isRunning())
+				call beaconTimer.startPeriodic(APP_TIMER);
+	   
    }
 
 
@@ -181,7 +186,6 @@ implementation{
 	   
 		socket_t *mySocket;
 	   socket_addr_t myAddr;
-	   dbg(GENERAL_CHANNEL, "CMD_TEST_CLIENT \n");
 	   	// set this as client and try to connect to listening server
 	   
 	   myAddr.location = TOS_NODE_ID;
@@ -195,6 +199,48 @@ implementation{
 		// call connect
 		call Transport.connect(*mySocket, &myAddr);
 		
+		 if (!call beaconTimer.isRunning())
+				call beaconTimer.startPeriodic(APP_TIMER);
+		
+   }
+   
+   event void beaconTimer.fired(){
+	   uint8_t writeBuffer[APP_BUFFER_SIZE];
+	   uint8_t readBuffer[APP_BUFFER_SIZE];
+	   uint8_t i, j = 1;
+	   socket_t mySocket;
+	   uint16_t* point;
+	   uint8_t queueSize = call socketQueue.size();
+	   
+	   dbg(GENERAL_CHANNEL, "App timer fired. \n");
+	   
+	   for (i = 0; i < APP_BUFFER_SIZE; i++){
+		   readBuffer[i] = 0;
+	   }
+	   //memcpy(writeBuffer, &nodeSeq, sizeof(uint16_t) ); 
+	   for (i=0; i<APP_BUFFER_SIZE; i++){
+		   writeBuffer[i] = i+1;
+	   }
+	   
+	   for (i=0; i< queueSize; i++) {
+			mySocket = call socketQueue.element(i);
+			j = call Transport.read(mySocket, readBuffer, APP_BUFFER_SIZE);
+			call Transport.write(mySocket, writeBuffer, APP_BUFFER_SIZE);
+			dbg(GENERAL_CHANNEL, "App read: ");
+			if (j != 0) {
+				for (j = 0; j< APP_BUFFER_SIZE; j++) {
+					if (j == APP_BUFFER_SIZE - 1) {
+						dbg_clear(GENERAL_CHANNEL, "%hu\n", readBuffer[j]);
+					} else {
+						dbg_clear(GENERAL_CHANNEL, "%hu, ", readBuffer[j]);
+					}
+				}
+			} else {
+				dbg_clear(GENERAL_CHANNEL, "nothing.\n");
+			}
+			
+		}
+	   
    }
 
 

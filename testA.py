@@ -30,7 +30,7 @@ def main():
 
     s.testClient(4);
     s.runTime(1);
-    s.runTime(100);
+    s.runTime(200);
 # make me longer later ^
 
 

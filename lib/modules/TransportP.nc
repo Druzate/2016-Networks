@@ -10,22 +10,23 @@
 #define TRUE 1
 #define SOCKET_POOL_SIZE 30		// don't exceed 2^8
 
-#define BEACON_PERIOD 70000		// potentially, timeout
+#define BEACON_TIME 140000		// potentially, timeout
 
 
 module TransportP{
 	// uses interfaces
 	uses interface Timer<TMilli> as beaconTimer;
+	uses interface Timer<TMilli> as queueTimer;
 	uses interface SimpleSend as TransportSender;
 	//uses interface Receive as MainReceive;
 	uses interface Forwarder;
 	
 	uses interface Pool<socket_t> as pool;
-	//uses interface Pool<socket_addr_t> as addresspool;
 	
 	uses interface Hashmap<socket_t*> as hashmap;
 	// hash table list of connections
-		// add connections on SYN
+	
+	uses interface Queue<socket_t> as toSendQueue;
 	
 	
 	//provides interfaces
@@ -34,19 +35,82 @@ module TransportP{
 implementation {
 		
 	
-	
+		event void queueTimer.fired(){
+			// pull off message queue, resend if no ack
+		}
 	
 		event void beaconTimer.fired(){
+			
+			uint16_t hashSize;
+			uint16_t i;
+			uint32_t* hashKeys;
+			socket_t* mySocket;
+			
+			pack p;			
+			tcp_pack* t;
+			
+			hashKeys = call hashmap.getKeys();
+			hashSize = call hashmap.size();
+			
 			
 			// connection timeout
 			
 			// go through hash keys
 			// for each hash entry
-				// if ESTABLISHED, continue;
-				// if CONN_SYN_SENT, resend SYN
-				// if CONN_SYN_RCVD, resend SYN_ACK <-- actually, is this necessary? eventually you'd get another request if it was needed
-				// if 
-				// if [insert teardown stuff here]
+			for (i = 0; i<hashSize; i++) {
+				
+				if (call hashmap.contains(*(hashKeys+i))){
+					mySocket = call hashmap.get(*(hashKeys+i));
+										
+					if (mySocket->conn_state == CONN_LISTEN) {
+						// all good, connection is established or listening and need not send anything
+						continue;
+					} else if (mySocket->conn_state == CONN_ESTABLISHED){		// if ESTABLISHED, continue;
+						// IF THERE IS DATA TO SEND AND WINDOW IS OPEN, SEND DATA
+						dbg (TRANSPORT_CHANNEL, "Able to send data, window size is %u/%u.\n", mySocket->advertised_window, BUFFER_SIZE);
+						continue;
+					} else if (mySocket->conn_state == CONN_SYN_SENT){	// if CONN_SYN_SENT, resend SYN
+						t->dest_port = mySocket->dest_addr.port;
+						t->src_port = mySocket->src_addr.port;
+						t->seq = rand();
+						t->ACK = 0;
+						t->flags = SYN_FLAG;
+						t->advertised_window = BUFFER_SIZE;
+						
+						dbg (TRANSPORT_CHANNEL, "Resending SYN to %u.\n", mySocket->dest_addr.location);
+						
+						call Transport.makePack(&p, TOS_NODE_ID, mySocket->dest_addr.location, MAX_TTL, PROTOCOL_TCP, 0, t, 0);
+						
+						call TransportSender.send(p, mySocket->dest_addr.location);
+		
+					} else if (mySocket->conn_state == CONN_SYN_RCVD){	// if CONN_SYN_RCVD, resend SYN_ACK 
+						// actually, is this necessary? eventually you'd get another request if it was needed
+						// codes it anyway
+						t->dest_port = mySocket->dest_addr.port;
+						t->src_port = mySocket->src_addr.port;
+						t->seq = rand();
+						t->ACK = 0;
+						t->flags = SYN_ACK_FLAG;
+						t->advertised_window = BUFFER_SIZE;
+						
+						dbg (TRANSPORT_CHANNEL, "Resending SYN ACK to %u.\n", mySocket->dest_addr.location);
+						
+						call Transport.makePack(&p, TOS_NODE_ID, mySocket->dest_addr.location, MAX_TTL, PROTOCOL_TCP, 0, t, 0);
+						
+						call TransportSender.send(p, mySocket->dest_addr.location);
+						
+					} else { // if [insert teardown stuff here]
+						dbg (TRANSPORT_CHANNEL, "What the heck is the state, it's %u.\n", mySocket->conn_state);
+						
+					}
+					
+				} else {
+					dbg (TRANSPORT_CHANNEL, "Some error in fetching key for timeout.\n");
+				}
+				
+			
+				
+			}
 			
 			
 		}
@@ -63,6 +127,11 @@ implementation {
 			sockPoint->sendBufferCounter = 0;
 			sockPoint->isServer = FALSE;
 			dbg (TRANSPORT_CHANNEL, "Issuing socket.\n");
+			
+			if (!call beaconTimer.isRunning())
+				call beaconTimer.startPeriodic(BEACON_TIME);
+			
+			call queueTimer.startOneShot(BEACON_TIME+3000);
 			
 			return sockPoint;
 		}
@@ -112,13 +181,44 @@ implementation {
 			* Client side only for now.
 			*/
 			// in fd, you have sendBufferCounter. if that + bufflen is greater than buffer size, FAIL
-			if (sizeof(nx_uint8_t)*BUFFER_SIZE < (bufflen+fd.sendBufferCounter)) {
+			
+			uint16_t j;
+			socket_t* mySocket;
+			uint32_t myKey;
+			
+			myKey = call Transport.getKey(fd.src_addr.port, fd.dest_addr.port, fd.dest_addr.location);
+			
+				// find socket with key
+			if (call hashmap.contains(myKey)){
+				mySocket = call hashmap.get(myKey);
+			} else {
+				dbg (TRANSPORT_CHANNEL, "Hash error in write.\n");
+				return;
+			}
+			
+			
+			if (sizeof(nx_uint8_t)*BUFFER_SIZE < (bufflen+mySocket->sendBufferCounter)) {
 				dbg (TRANSPORT_CHANNEL, "Not enough room in send buffer to write.\n");
 				return 0;
 			} else {	// else, memcpy and increment counter
-				memcpy(fd.sendBuffer+fd.sendBufferCounter, buff, bufflen ); 
+				dbg (TRANSPORT_CHANNEL, "Wrote to send buffer.\n");
+				memcpy(mySocket->sendBuffer+mySocket->sendBufferCounter, buff, bufflen ); 
 				// copy from buff to sendBuffer with sendBufferCounter offset; copy bufflen bytes
-				fd.sendBufferCounter += bufflen;
+				//dbg(TRANSPORT_CHANNEL, "!!! buffercounter = %u, BUFFLEN %u,,\n", fd.sendBufferCounter, bufflen );
+				mySocket->sendBufferCounter += bufflen;
+				
+				/*dbg(TRANSPORT_CHANNEL, "App wrote: ");
+					for (j = 0; j< APP_BUFFER_SIZE; j++) {
+						if (j == APP_BUFFER_SIZE - 1) {
+							dbg_clear(TRANSPORT_CHANNEL, "%hu\n", fd.sendBuffer[j]);
+						} else {
+							dbg_clear(TRANSPORT_CHANNEL, "%hu, ", fd.sendBuffer[j]);
+						}
+					}
+				*/
+					
+				dbg(TRANSPORT_CHANNEL, "!!! buffercounter = %u, BUFFLEN %u,,\n", mySocket->sendBufferCounter, bufflen );
+				
 				return bufflen;	// amount written
 			}
 			
@@ -260,6 +360,7 @@ implementation {
 						
 						// change to ESTABLISHED
 						mySocket->conn_state = CONN_ESTABLISHED;
+						mySocket->advertised_window = msg->advertised_window;
 						// signal connectDone with your socket
 						signal Transport.connectDone(*mySocket);
 						
@@ -292,6 +393,7 @@ implementation {
 					if (mySocket->conn_state = CONN_SYN_RCVD) {
 						// if you are in SYN_RCVD, you are server, change to ESTABLISHED
 						mySocket->conn_state = CONN_ESTABLISHED;
+						mySocket->advertised_window = msg->advertised_window;
 						// signal accept with your socket
 						signal Transport.accept(*mySocket);
 					}
@@ -308,7 +410,7 @@ implementation {
 				// bufflen = CHECK FOR SENTINEL VALUE
 				// if does not exist, bufflen is full, else it is to that point
 				
-				if (sizeof(nx_uint8_t)*BUFFER_SIZE < (bufflen+mySocket->sendBufferCounter)) {
+				if (sizeof(nx_uint8_t)*BUFFER_SIZE < (bufflen+mySocket->recvBufferCounter)) {
 					dbg (TRANSPORT_CHANNEL, "Not enough room in recv buffer to write.\n");
 					return 0;
 				} else {	// else, memcpy and increment counter
@@ -338,28 +440,41 @@ implementation {
 			* Server side only, for now.
 			*/
 			uint16_t temp = 0;	// purely for reporting amount read
+			uint16_t j;
+			socket_t* mySocket;
+			uint32_t myKey;
+			
+			myKey = call Transport.getKey(fd.src_addr.port, fd.dest_addr.port, fd.dest_addr.location);
+			
+				// find socket with key
+			if (call hashmap.contains(myKey)){
+				mySocket = call hashmap.get(myKey);
+			} else {
+				dbg (TRANSPORT_CHANNEL, "Hash error in read.\n");
+				return;
+			}
 			
 			// if nothing in socket buffer, return 0
-			if (fd.recvBufferCounter == 0) {
+			if (mySocket->recvBufferCounter == 0) {
 				return 0;	// nothing to read
 			}
 			// if what is in socket buffer is less than bufflen, read that much.
-			else if (fd.recvBufferCounter < bufflen) {
-				memcpy(buff, fd.recvBuffer, fd.recvBufferCounter ); 
+			else if (mySocket->recvBufferCounter < bufflen) {
+				memcpy(buff, mySocket->recvBuffer, mySocket->recvBufferCounter ); 
 				
-				temp = fd.recvBufferCounter;
-				fd.recvBufferCounter = 0;	// aaaand decrement back to empty
+				temp = mySocket->recvBufferCounter;
+				mySocket->recvBufferCounter = 0;	// aaaand decrement back to empty
 				return temp;	// report amount read
 			}
-			else if (fd.recvBufferCounter >= bufflen) {
-				memcpy(buff, fd.recvBuffer, bufflen );	// first, copy necessary to buffer
+			else if (mySocket->recvBufferCounter >= bufflen) {
+				memcpy(buff, mySocket->recvBuffer, bufflen );	// first, copy necessary to buffer
 				// next, we have to move the socket's buffer over (ie, leave only what has not been read)
 				// to do this, we memcpy from the recvBuffer with the offset of what has been read
 				// to the beginning of recvBuffer (moving it)
 				// how many bytes moved? the counter of bytes previously stored in buffer, minus what was just read.
-				memcpy(fd.recvBuffer, fd.recvBuffer+bufflen, (fd.recvBufferCounter - bufflen) );
+				memcpy(mySocket->recvBuffer, mySocket->recvBuffer+bufflen, (mySocket->recvBufferCounter - bufflen) );
 				// then we decrement counter by what was just read.
-				fd.recvBufferCounter -= bufflen;
+				mySocket->recvBufferCounter -= bufflen;
 				// finally, we report the amount read.
 				return bufflen;
 			}
@@ -383,7 +498,7 @@ implementation {
 			t->flags = SYN_FLAG;
 			t->advertised_window = BUFFER_SIZE;
 			
-			dbg (TRANSPORT_CHANNEL, "Issuing SYN to %u.\n", fd.dest_addr.location);
+			dbg (TRANSPORT_CHANNEL, "Sending SYN to %u.\n", fd.dest_addr.location);
 			
 			call Transport.makePack(&p, TOS_NODE_ID, fd.dest_addr.location, MAX_TTL, PROTOCOL_TCP, 0, t, 0);
 			// payload manipulated directly

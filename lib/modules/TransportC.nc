@@ -7,6 +7,7 @@ configuration TransportC{
 implementation {
 	components TransportP;
 	components new TimerMilliC() as beaconTimer;
+	components new TimerMilliC() as queueTimer;
 	components new SimpleSendC(AM_TRANSPORT);
 	components new AMReceiverC(AM_TRANSPORT);
 	
@@ -20,6 +21,7 @@ implementation {
 	TransportP.TransportSender -> SimpleSendC;
 	//TransportP.MainReceive -> AMReceiverC;
 	TransportP.beaconTimer -> beaconTimer;
+	TransportP.queueTimer -> queueTimer;
 	
 	//pools
 	components new PoolC(socket_t, 30) as sockPool;
@@ -31,6 +33,9 @@ implementation {
 	
 	components ForwarderC;
 	TransportP.TransportSender -> ForwarderC.SimpleSend;
+	
+	components new QueueC(socket_t, 100) as sockQueue;
+	TransportP.toSendQueue->sockQueue;
 
 	
 }
