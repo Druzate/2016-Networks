@@ -80,11 +80,13 @@ implementation {
 						continue;
 					} else if (mySocket->conn_state == CONN_ESTABLISHED){		// if ESTABLISHED, continue;
 						// IF THERE IS DATA TO SEND AND WINDOW IS OPEN, SEND DATA
-						
+						dbg (TRANSPORT_CHANNEL, "Conn established\n", mySocket->dest_addr.location);
 						
 						if (mySocket->lastWritten - mySocket->lastSent != 0) {	// if there is something to send
+							dbg (TRANSPORT_CHANNEL, "Sock1.\n", mySocket->dest_addr.location);
 							if (mySocket->lastSent - mySocket->lastAcked == 0) {	// change to "< mySocket->advertised_window" later
 								//prepare TCP packet
+								dbg (TRANSPORT_CHANNEL, "Sock2.\n", mySocket->dest_addr.location);
 								t = (tcp_pack*) p.payload;
 								t->dest_port = mySocket->dest_addr.port;
 								t->src_port = mySocket->src_addr.port;
@@ -109,6 +111,9 @@ implementation {
 									mySocket->lastSent += TCP_PACKET_MAX_PAYLOAD_SIZE;
 								}
 								
+								if (mySocket->lastSent > BUFFER_SIZE)
+									mySocket->lastSent -= BUFFER_SIZE;
+								
 								
 								
 								call Transport.makePack(&p, TOS_NODE_ID, mySocket->dest_addr.location, MAX_TTL, PROTOCOL_TCP, 0, t, 0);
@@ -125,16 +130,6 @@ implementation {
 								
 							}
 						}
-						
-						
-
-						// if (written-sent > 0) - aka, there is data to be sent that has not been sent yet
-						// and (sent - acked) < window - aka, window still has room
-						// but start with (sent - acked) == 0
-							// send a packet of data
-							// insert into queue and start queue timer if not yet started
-							// increment sent
-						
 						
 						
 						
@@ -273,6 +268,7 @@ implementation {
 			uint16_t writeLengthPossible;
 			uint8_t isWrap;
 			
+		
 			myKey = call Transport.getKey(fd.src_addr.port, fd.dest_addr.port, fd.dest_addr.location);
 			
 				// find socket with key
@@ -287,7 +283,7 @@ implementation {
 				// can write from beginning to acked and from written to end
 				isWrap = TRUE;
 				writeLengthPossible = (BUFFER_SIZE - mySocket->lastWritten) + (mySocket->lastAcked);
-			} else {	// if (mySocket->lastWritten < mySocket->lastAcked)
+				} else {	// if (mySocket->lastWritten < mySocket->lastAcked)
 				// non-wrap, can write from written to acked
 				isWrap = FALSE;
 				writeLengthPossible = (mySocket->lastAcked - mySocket->lastWritten);
@@ -300,25 +296,31 @@ implementation {
 			// and ofc, you set the new bytes written.
 			
 			
-			if (sizeof(nx_uint8_t)*BUFFER_SIZE < writeLengthPossible) {
+			
+			dbg (TRANSPORT_CHANNEL, "Send buffer remaining in socket before copying: %u.\n", writeLengthPossible);
+			if (bufflen > writeLengthPossible) {
 				dbg (TRANSPORT_CHANNEL, "Not enough room in socket send buffer to write; write length possible is %u and app trying to write %u.\n", writeLengthPossible, bufflen);
 				return 0;
 			} else {	// else, memcpy and increment counter
-			
 				if (isWrap == TRUE) {
 					temp = BUFFER_SIZE - mySocket->lastWritten;	//let's store here for simplicity
 					// first, copy from lastWritten to end
-					memcpy(mySocket->sendBuffer+mySocket->lastWritten, buff, temp*sizeof(uint8_t) );
-					// next, copy from beginning to up to lastAcked for what remains. with offset in buff
-					memcpy(mySocket->sendBuffer, buff+temp, (bufflen - temp)*sizeof(uint8_t) );
 					
+					if (bufflen > temp){
+					
+						memcpy(mySocket->sendBuffer+mySocket->lastWritten, buff, temp*sizeof(uint8_t) );
+						// next, copy from beginning to up to lastAcked for what remains. with offset in buff
+						memcpy(mySocket->sendBuffer, (buff+temp), (bufflen - temp)*sizeof(uint8_t) );
+					} else {
+						memcpy(mySocket->sendBuffer+mySocket->lastWritten, buff, bufflen*sizeof(uint8_t) );
+					}
 					// next, set new written position
-					if (writeLengthPossible < (BUFFER_SIZE - mySocket->lastWritten)) {
+					if (writeLengthPossible < (BUFFER_SIZE - mySocket->lastWritten) || (bufflen < temp) ) {
+						//dbg (TRANSPORT_CHANNEL, "Last written: %u.\n", (mySocket->lastWritten));
 						mySocket->lastWritten += bufflen;
 					} else {
 						mySocket->lastWritten = (bufflen - temp);
 					}
-					
 				} else {
 					// first, copy from lastWritten up to lastAcked
 					memcpy(mySocket->sendBuffer+mySocket->lastWritten, buff, bufflen*sizeof(uint8_t) );
@@ -326,7 +328,12 @@ implementation {
 					// next, set new written position
 					mySocket->lastWritten += bufflen;
 				}
+				dbg (TRANSPORT_CHANNEL, "BUFFER_ZISE - last written: %u.\n", (BUFFER_SIZE - mySocket->lastWritten) );
+				dbg (TRANSPORT_CHANNEL, "Last acked: %u.\n", (mySocket->lastAcked));
+				dbg (TRANSPORT_CHANNEL, "Send buffer remaining in socket after copying: %u.\n", (BUFFER_SIZE - mySocket->lastWritten) + (mySocket->lastAcked));
 				
+				if (mySocket->lastWritten > BUFFER_SIZE)
+					mySocket->lastWritten -= BUFFER_SIZE;
 				
 				dbg (TRANSPORT_CHANNEL, "Wrote to send buffer.\n");
 				return bufflen;	// amount written
@@ -564,6 +571,9 @@ implementation {
 							mySocket->lastRcvd += bufflen;
 						}
 						
+						if (mySocket->lastRcvd > BUFFER_SIZE)
+							mySocket->lastRcvd -= BUFFER_SIZE;
+						
 						// next, send ack of data
 						t = (tcp_pack*) p.payload;
 						t->dest_port = mySocket->dest_addr.port;
@@ -667,6 +677,9 @@ implementation {
 				// next, set new read position
 				mySocket->lastRead += readLengthPossible;
 			}
+			
+			if (mySocket->lastRead > BUFFER_SIZE)
+					mySocket->lastRead -= BUFFER_SIZE;
 			
 			
 			// finally, we report the amount read.
